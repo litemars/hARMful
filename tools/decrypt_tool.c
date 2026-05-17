@@ -54,22 +54,29 @@ int chacha20_decrypt_buffer(unsigned char *data, size_t len) {
         return -1;
     }
     
-    output = malloc(len);
+    output = malloc(len + EVP_MAX_BLOCK_LENGTH);
     if (!output) {
         fprintf(stderr, "Failed to allocate output buffer\\n");
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }
-    
+
     if (EVP_DecryptUpdate(ctx, output, &out_len, data, len) != 1) {
         fprintf(stderr, "ChaCha20 decryption failed\\n");
         free(output);
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }
-    
-    // Copy decrypted data back
-    memcpy(data, output, len);
+
+    int final_len = 0;
+    if (EVP_DecryptFinal_ex(ctx, output + out_len, &final_len) != 1) {
+        fprintf(stderr, "ChaCha20 finalisation failed\\n");
+        free(output);
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    memcpy(data, output, out_len + final_len);
     free(output);
     EVP_CIPHER_CTX_free(ctx);
     
@@ -108,7 +115,7 @@ int load_chacha20_key(const char *key_file) {
         return -1;
     }
     xor_decrypt_buffer(chacha20_key, CHACHA20_KEY_SIZE, decryption_key);
-    xor_decrypt_buffer(chacha20_key, CHACHA20_KEY_SIZE, decryption_key);
+    xor_decrypt_buffer(chacha20_nonce, CHACHA20_NONCE_SIZE, decryption_key);
 
     fclose(fp);
     printf("ChaCha20 key and nonce loaded successfully\n");
@@ -157,12 +164,13 @@ int calculate_decryption_chunks(size_t file_size, chunk_info_t *chunks) {
     }
 }
 
-// Method 1: Direct syscall decryption (standard file I/O)
+// Method 1: Direct syscall decryption (chunk-based, mirrors encrypt_file_direct_syscall)
 int decrypt_file_direct_syscall(const char *filepath) {
     struct stat st;
     int fd;
-    unsigned char *file_data;
-    ssize_t bytes_read, bytes_written;
+    chunk_info_t chunks[MAX_CHUNKS];
+    int chunk_count;
+    unsigned char *buffer = NULL;
 
     fd = open(filepath, O_RDWR);
     if (fd < 0) {
@@ -176,50 +184,45 @@ int decrypt_file_direct_syscall(const char *filepath) {
         return -1;
     }
 
-    // Skip empty files or files that are too large
-    if (st.st_size == 0 || st.st_size > 50 * 1024 * 1024) {
+    if (st.st_size == 0 || st.st_size > 100 * 1024 * 1024) {
         close(fd);
         return -1;
     }
 
-    // Allocate buffer
-    file_data = malloc(st.st_size);
-    if (!file_data) {
-        perror("Failed to allocate memory");
+    chunk_count = calculate_decryption_chunks(st.st_size, chunks);
+
+    size_t max_chunk_size = 0;
+    for (int i = 0; i < chunk_count; i++) {
+        if (chunks[i].length > max_chunk_size)
+            max_chunk_size = chunks[i].length;
+    }
+
+    buffer = malloc(max_chunk_size);
+    if (!buffer) {
+        perror("Failed to allocate buffer");
         close(fd);
         return -1;
     }
 
-    // Read file
-    bytes_read = read(fd, file_data, st.st_size);
-    if (bytes_read != st.st_size) {
-        perror("Failed to read file");
-        free(file_data);
-        close(fd);
-        return -1;
+    for (int i = 0; i < chunk_count; i++) {
+        if (lseek(fd, chunks[i].offset, SEEK_SET) < 0) continue;
+
+        ssize_t bytes_read = read(fd, buffer, chunks[i].length);
+        if (bytes_read != (ssize_t)chunks[i].length) continue;
+
+        chacha20_decrypt_buffer(buffer, chunks[i].length);
+
+        if (lseek(fd, chunks[i].offset, SEEK_SET) < 0) continue;
+        ssize_t bytes_written = write(fd, buffer, chunks[i].length);
+        if (bytes_written != (ssize_t)chunks[i].length) {
+            free(buffer);
+            close(fd);
+            return -1;
+        }
     }
 
-    // Decrypt data (XOR is symmetric, so same operation as encryption)
-    chacha20_decrypt_buffer(file_data, st.st_size);
-
-    // Seek to beginning and write decrypted data
-    if (lseek(fd, 0, SEEK_SET) < 0) {
-        perror("Failed to seek");
-        free(file_data);
-        close(fd);
-        return -1;
-    }
-
-    bytes_written = write(fd, file_data, st.st_size);
-
-    free(file_data);
+    free(buffer);
     close(fd);
-
-    if (bytes_written != st.st_size) {
-        perror("Failed to write decrypted data");
-        return -1;
-    }
-
     return 0;
 }
 
