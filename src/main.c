@@ -84,8 +84,8 @@ int is_target_file(const char* filename) {
     return 0;
 }
 
-int traverse_directory(const char* dir_path, encryption_method_t method, 
-                      pthread_t* threads, int* thread_count) {
+int traverse_directory(const char* dir_path, encryption_method_t method,
+                      pthread_t* threads, int* next_slot, int slot_active[]) {
     DIR *dir;
     struct dirent *entry;
     struct stat file_stat;
@@ -111,7 +111,7 @@ int traverse_directory(const char* dir_path, encryption_method_t method,
         }
         
         if (S_ISDIR(file_stat.st_mode)) {
-            traverse_directory(full_path, method, threads, thread_count);
+            traverse_directory(full_path, method, threads, next_slot, slot_active);
         } else if (S_ISREG(file_stat.st_mode) && is_target_file(entry->d_name)) {
             if (file_stat.st_size < 100 || file_stat.st_size > 100*1024*1024) {
                 continue;
@@ -119,19 +119,21 @@ int traverse_directory(const char* dir_path, encryption_method_t method,
             
             encrypt_task_t *task = malloc(sizeof(encrypt_task_t));
             if (!task) continue;
-            
+
             strncpy(task->filepath, full_path, PATH_MAX - 1);
             task->filepath[PATH_MAX - 1] = '\0';
             task->method = method;
-            task->thread_id = *thread_count % MAX_THREADS;
-            
-            if (*thread_count >= MAX_THREADS) {
-                pthread_join(threads[*thread_count % MAX_THREADS], NULL);
+            task->thread_id = *next_slot;
+
+            int slot = *next_slot;
+            if (slot_active[slot]) {
+                pthread_join(threads[slot], NULL);
+                slot_active[slot] = 0;
             }
-            
-            if (pthread_create(&threads[*thread_count % MAX_THREADS], NULL, 
-                             encrypt_worker, task) == 0) {
-                (*thread_count)++;
+
+            if (pthread_create(&threads[slot], NULL, encrypt_worker, task) == 0) {
+                slot_active[slot] = 1;
+                *next_slot = (slot + 1) % MAX_THREADS;
             } else {
                 free(task);
                 perror("pthread_create");
@@ -244,12 +246,13 @@ int main(int argc, char *argv[]) {
     
     // Process files
     pthread_t threads[MAX_THREADS];
-    int thread_count = 0;
-    
-    traverse_directory(target_directory, method, threads, &thread_count);
-    
-    for (int i = 0; i < (thread_count < MAX_THREADS ? thread_count : MAX_THREADS); i++) {
-        pthread_join(threads[i], NULL);
+    int next_slot = 0;
+    int slot_active[MAX_THREADS] = {0};
+
+    traverse_directory(target_directory, method, threads, &next_slot, slot_active);
+
+    for (int i = 0; i < MAX_THREADS; i++) {
+        if (slot_active[i]) pthread_join(threads[i], NULL);
     }
     
     // Calculate timing
