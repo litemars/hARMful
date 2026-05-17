@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
     
     // Create test directory
     mkdir(test_dir, 0755);
-    chdir(test_dir);
+    if (chdir(test_dir) != 0) { perror("chdir"); return 1; }
     
     // Create various file sizes and types
     create_test_file("small_text.txt", 1024, "text");
@@ -77,7 +77,7 @@ int main(int argc, char *argv[]) {
     create_test_file("data.json", 8192, "text");
     
     mkdir("subdir", 0755);
-    chdir("subdir");
+    if (chdir("subdir") != 0) { perror("chdir"); return 1; }
     
     create_test_file("nested_file1.txt", 4096, "text");
     create_test_file("nested_file2.log", 2048, "text");
@@ -86,10 +86,10 @@ int main(int argc, char *argv[]) {
     create_test_file("nested_image.jpg", 128 * 1024, "binary");
     create_test_file("nested_config.xml", 1024, "text");
     
-    chdir("..");
-    
+    if (chdir("..") != 0) { perror("chdir"); return 1; }
+
     mkdir("subdir2", 0755);
-    chdir("subdir2");
+    if (chdir("subdir2") != 0) { perror("chdir"); return 1; }
     
     create_test_file("file1.txt", 8192, "text");
     create_test_file("file2.dat", 32 * 1024, "binary");
@@ -97,37 +97,37 @@ int main(int argc, char *argv[]) {
     create_test_file("file4.bin", 16 * 1024, "binary");
     create_test_file("file5.log", 2048, "text");
     
-    chdir("..");
-    
+    if (chdir("..") != 0) { perror("chdir"); return 1; }
+
     mkdir("subdir3", 0755);
-    chdir("subdir3");
+    if (chdir("subdir3") != 0) { perror("chdir"); return 1; }
     
     create_test_file("report.docx", 256 * 1024, "binary");
     create_test_file("analysis.xlsx", 128 * 1024, "binary");
     create_test_file("readme.md", 1024, "text");
     create_test_file("photo.jpg", 512 * 1024, "binary");
     
-    chdir("..");
-    
+    if (chdir("..") != 0) { perror("chdir"); return 1; }
+
     mkdir("documents", 0755);
-    chdir("documents");
+    if (chdir("documents") != 0) { perror("chdir"); return 1; }
     
     create_test_file("contract.pdf", 1024 * 1024, "binary");
     create_test_file("invoice.txt", 2048, "text");
     create_test_file("letter.doc", 64 * 1024, "binary");
     create_test_file("receipt.png", 32 * 1024, "binary");
     
-    chdir("..");
-    
+    if (chdir("..") != 0) { perror("chdir"); return 1; }
+
     mkdir("media", 0755);
-    chdir("media");
+    if (chdir("media") != 0) { perror("chdir"); return 1; }
     
     create_test_file("video1.mp4", 5 * 1024 * 1024, "binary");
     create_test_file("video2.avi", 4 * 1024 * 1024, "binary");
     create_test_file("song.mp3", 2 * 1024 * 1024, "binary");
     create_test_file("picture.jpg", 256 * 1024, "binary");
     
-    chdir("..");
-    
+    if (chdir("..") != 0) { perror("chdir"); return 1; }
+
     return 0;
 }
